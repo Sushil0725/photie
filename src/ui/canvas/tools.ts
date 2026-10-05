@@ -616,7 +616,8 @@ function cropDown(p: Pt) {
   const f: Frame = { cx: r.x + r.w / 2, cy: r.y + r.h / 2, w: r.w, h: r.h, rot: 0 };
   const h = hitHandle(f, p, s.zoom, ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']);
   if (h && h !== 'rot') ix.drag = { kind: 'crop', mode: h, start: p, orig: r };
-  else if (pointInFrame(f, p)) ix.drag = { kind: 'crop', mode: 'move', start: p, orig: r };
+  // Until a crop box exists, any drag draws a new one; afterwards dragging inside moves it.
+  else if (s.cropRect && pointInFrame(f, p)) ix.drag = { kind: 'crop', mode: 'move', start: p, orig: r };
   else ix.drag = { kind: 'crop', mode: 'new', start: p, orig: r };
 }
 
@@ -904,8 +905,11 @@ export function pointerUp(e: PointerEvent) {
       if (c) applySelection(c, d.subtract ? 'subtract' : s.selection ? 'add' : 'new', 0, 'Selection brush');
       break;
     }
-    case 'crop':
+    case 'crop': {
+      const r = S().cropRect;
+      if (r && (r.w * s.zoom < 4 || r.h * s.zoom < 4)) setS({ cropRect: null });
       break;
+    }
     case 'gradient': {
       const g = ix.gradient;
       ix.gradient = null;

@@ -1105,7 +1105,8 @@ input[type='range']::-moz-range-thumb {
 /* ================================= Editor ================================= */
 .editor {
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   height: 100dvh;
   width: 100vw;
   overflow: hidden;
@@ -1132,6 +1133,7 @@ input[type='range']::-moz-range-thumb {
 .menubar {
   display: flex;
   align-items: center;
+  min-width: 0;
 }
 .menubar-item {
   position: relative;
@@ -2373,6 +2375,17 @@ kbd {
   }
   .topbar .brand span {
     display: none;
+  }
+  .topbar {
+    gap: 4px;
+    padding: 0 6px;
+  }
+  .topbar .zoombox,
+  .topbar .theme-btn {
+    display: none;
+  }
+  .topbar .btn.primary {
+    padding: 0 10px;
   }
   .workspace {
     flex-direction: column-reverse;

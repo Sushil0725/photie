@@ -144,6 +144,8 @@ export async function saveNow() {
     toast('Autosave failed (storage may be full)', 'error');
   } finally {
     saving = false;
+    // Changes made while saving get their own save.
+    if (S().saveState === 'unsaved') autoSave();
   }
 }
 

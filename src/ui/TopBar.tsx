@@ -95,7 +95,7 @@ export function TopBar() {
           </select>
         </div>
         <button
-          className="icon-btn"
+          className="icon-btn theme-btn"
           title="Toggle theme"
           onClick={() => {
             setTheme(themeDark ? 'light' : 'dark');

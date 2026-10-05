@@ -1,11 +1,11 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import { Eye, EyeOff, Lock, LockOpen, Plus, Copy, Trash2, Type, Shapes, Image as ImageIcon, SquareDashed, Merge, FolderPlus } from 'lucide-react';
+import { Eye, EyeOff, Lock, LockOpen, Plus, Copy, Trash2, Type, Shapes, Image as ImageIcon, SquareDashed, Merge } from 'lucide-react';
 import { layerThumbnail } from '../../engine/render';
 import { BLEND_MODES, type Layer } from '../../engine/types';
 import { S, commit, setS, useEditor } from '../../store/editor';
 import { addMask, deleteLayers, duplicateLayers, mergeSelected, moveLayerTo, newEmptyLayer, selectLayers, toggleSelectLayer, updateLayer } from '../../store/layers';
 import { selectLayerPixels } from '../../store/image';
-import { Select } from '../controls';
+import { NumberField, Select } from '../controls';
 import { ContextMenu, canvasContextItems } from '../ContextMenu';
 
 const Thumb = memo(function Thumb({ layer, mask }: { layer: Layer; mask?: boolean }) {
@@ -39,7 +39,7 @@ const Thumb = memo(function Thumb({ layer, mask }: { layer: Layer; mask?: boolea
   return <canvas ref={ref} width={64} height={64} className="layer-thumb" />;
 });
 
-function LayerRow({ layer, index, selected, editMask, onDragStart, onDropAt }: { layer: Layer; index: number; selected: boolean; editMask: boolean; onDragStart: (id: string) => void; onDropAt: (index: number) => void }) {
+function LayerRow({ layer, index, selected, editMask, onDropAt }: { layer: Layer; index: number; selected: boolean; editMask: boolean; onDropAt: (id: string, index: number) => void }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(layer.name);
   const [over, setOver] = useState<'above' | 'below' | null>(null);
@@ -51,7 +51,6 @@ function LayerRow({ layer, index, selected, editMask, onDragStart, onDropAt }: {
       onDragStart={(e) => {
         e.dataTransfer.effectAllowed = 'move';
         e.dataTransfer.setData('text/x-layer', layer.id);
-        onDragStart(layer.id);
       }}
       onDragOver={(e) => {
         if (!e.dataTransfer.types.includes('text/x-layer')) return;
@@ -62,9 +61,12 @@ function LayerRow({ layer, index, selected, editMask, onDragStart, onDropAt }: {
       onDragLeave={() => setOver(null)}
       onDrop={(e) => {
         e.preventDefault();
-        // Rows are listed top-first, so "above" means a higher stack index.
-        onDropAt(over === 'above' ? index + 1 : index);
         setOver(null);
+        const id = e.dataTransfer.getData('text/x-layer');
+        if (!id || id === layer.id) return;
+        const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        // Rows are listed top-first, so "above" means a higher stack index.
+        onDropAt(id, e.clientY < r.top + r.height / 2 ? index + 1 : index);
       }}
       onClick={(e) => {
         if (e.ctrlKey || e.metaKey) {
@@ -174,7 +176,6 @@ export function LayersPanel() {
   const doc = useEditor((s) => s.doc);
   const selectedIds = useEditor((s) => s.selectedIds);
   const editMask = useEditor((s) => s.editMask);
-  const [drag, setDrag] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   if (!doc) return null;
   const active = doc.layers.find((l) => l.id === selectedIds[selectedIds.length - 1]);
@@ -189,18 +190,17 @@ export function LayersPanel() {
           onChange={(v) => active && updateLayer(active.id, { blend: v }, 'Blend mode')}
           title="Blend mode"
         />
-        <label className="opacity-field" title="Layer opacity">
+        <div className="opacity-field" title="Layer opacity">
           <span>Opacity</span>
-          <input
-            type="number"
+          <NumberField
+            value={active ? Math.round(active.opacity * 100) : 100}
             min={0}
             max={100}
-            value={active ? Math.round(active.opacity * 100) : 100}
-            disabled={!active}
-            onChange={(e) => active && updateLayer(active.id, { opacity: Math.min(100, Math.max(0, +e.target.value)) / 100 }, 'Opacity')}
-            onKeyDown={(e) => e.stopPropagation()}
+            unit="%"
+            width={64}
+            onChange={(v) => active && updateLayer(active.id, { opacity: v / 100 }, 'Opacity')}
           />
-        </label>
+        </div>
       </div>
       <div
         className="layer-list"
@@ -216,12 +216,9 @@ export function LayersPanel() {
             index={i}
             selected={selectedIds.includes(l.id)}
             editMask={editMask}
-            onDragStart={setDrag}
-            onDropAt={(idx) => {
-              if (!drag) return;
-              const from = doc.layers.findIndex((x) => x.id === drag);
-              moveLayerTo(drag, from < idx ? idx - 1 : idx);
-              setDrag(null);
+            onDropAt={(id, idx) => {
+              const from = doc.layers.findIndex((x) => x.id === id);
+              if (from >= 0) moveLayerTo(id, from < idx ? idx - 1 : idx);
             }}
           />
         ))}
@@ -267,9 +264,6 @@ export function LayersPanel() {
         </button>
         <button className="icon-btn" title="Merge (Ctrl+E)" disabled={!selectedIds.length} onClick={mergeSelected}>
           <Merge size={16} />
-        </button>
-        <button className="icon-btn" title="Select all layers" onClick={() => selectLayers(doc.layers.map((l) => l.id))}>
-          <FolderPlus size={16} />
         </button>
         <button className="icon-btn danger" title="Delete layer" disabled={!selectedIds.length} onClick={() => deleteLayers()}>
           <Trash2 size={16} />

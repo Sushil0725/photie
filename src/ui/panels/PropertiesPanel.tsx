@@ -126,7 +126,7 @@ function TextSection({ t }: { t: TextLayer }) {
         <FillButton fill={t.fill} onChange={(f) => f && liveSet({ fill: f })} onCommit={() => liveEnd('Text color')} title="Text color" />
       </div>
       <div className="row toolrow">
-        <IconButton icon={<Bold size={15} />} title="Bold" active={t.weight >= 700} onClick={() => set({ weight: t.weight >= 700 ? 400 : Math.max(700, ...weights.filter((w) => w <= 800)) }, 'Bold')} />
+        <IconButton icon={<Bold size={15} />} title="Bold" active={t.weight >= 700} onClick={() => set({ weight: t.weight >= 700 ? (weights.includes(400) ? 400 : weights[0]) : weights.includes(700) ? 700 : weights[weights.length - 1] }, 'Bold')} />
         <IconButton icon={<Italic size={15} />} title="Italic" active={t.italic} onClick={() => set({ italic: !t.italic }, 'Italic')} />
         <IconButton icon={<Underline size={15} />} title="Underline" active={t.underline} onClick={() => set({ underline: !t.underline }, 'Underline')} />
         <IconButton icon={<Strikethrough size={15} />} title="Strikethrough" active={t.strike} onClick={() => set({ strike: !t.strike }, 'Strikethrough')} />

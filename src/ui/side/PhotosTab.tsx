@@ -39,7 +39,7 @@ async function fetchPicsum(page: number): Promise<Photo[]> {
 }
 
 async function fetchOpenverse(q: string, page: number): Promise<Photo[]> {
-  const r = await fetch(`https://api.openverse.org/v1/images/?q=${encodeURIComponent(q)}&page_size=30&page=${page}&mature=false`);
+  const r = await fetch(`https://api.openverse.org/v1/images/?q=${encodeURIComponent(q)}&page_size=20&page=${page}&mature=false`);
   if (!r.ok) throw new Error('Search is busy, try again shortly');
   const json: { results: { id: string; thumbnail: string; url: string; width: number | null; height: number | null; creator: string | null; license: string; title: string }[] } = await r.json();
   return json.results.map((p) => ({
