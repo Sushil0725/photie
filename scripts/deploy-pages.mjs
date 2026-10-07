@@ -12,6 +12,8 @@ run(`npx vite build --mode pages --outDir ${dir} --emptyOutDir`);
 fs.writeFileSync(path.join(dir, '.nojekyll'), '');
 // Single-page app: serve the editor for unknown paths too.
 fs.copyFileSync(path.join(dir, 'index.html'), path.join(dir, '404.html'));
+// Vercel reads the config of the pushed branch itself, so tell it not to build this already-built branch.
+fs.writeFileSync(path.join(dir, 'vercel.json'), JSON.stringify({ git: { deploymentEnabled: false } }, null, 2) + '\n');
 
 fs.rmSync(path.join(dir, '.git'), { recursive: true, force: true });
 run('git init -q -b gh-pages', dir);
