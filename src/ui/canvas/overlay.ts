@@ -317,7 +317,9 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, dpr: number, time: nu
 
   // Clone source marker.
   if (tool === 'clone' && s.cloneSource && ix.inside) {
-    const src = ix.cloneAnchor && ix.pointer ? { x: ix.pointer.x + ix.cloneAnchor.x, y: ix.pointer.y + ix.cloneAnchor.y } : s.cloneSource;
+    // Non-aligned strokes restart at the source point, so only follow the brush while painting.
+    const anchor = ix.cloneAnchor && (s.opts.cloneAligned || ix.drag?.kind === 'stroke') ? ix.cloneAnchor : null;
+    const src = anchor && ix.pointer ? { x: ix.pointer.x + anchor.x, y: ix.pointer.y + anchor.y } : s.cloneSource;
     const x = sx(src.x),
       y = sy(src.y);
     ctx.strokeStyle = '#fff';

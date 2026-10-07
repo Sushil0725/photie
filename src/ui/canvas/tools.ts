@@ -1,10 +1,10 @@
 import { Stroke, type StrokeConfig, type ToolKind } from '../../engine/brush';
 import { createShapeLayer, createTextLayer, replaceLayer } from '../../engine/document';
 import { floodMask, maskToCanvas } from '../../engine/flood';
-import { applyMatrix, hitLayer, layerBounds, layerMatrix, layerSize, rectFromPoints, unionRects, type Pt } from '../../engine/geometry';
+import { applyMatrix, boundsOfPoints, hitLayer, layerBounds, layerMatrix, layerSize, rectFromPoints, unionRects, type Pt } from '../../engine/geometry';
 import { renderDocToCanvas } from '../../engine/render';
 import { maskInLayerSpace, rectPath, maskFromPath } from '../../engine/selection';
-import type { Doc, Layer, Rect, SelectionMode } from '../../engine/types';
+import type { Doc, Layer, RasterLayer, Rect, SelectionMode } from '../../engine/types';
 import { cloneCanvas, createCanvas, ctx2d, luminance, parseColor, rgbaToHex, withAlpha } from '../../engine/util';
 import { touchCanvas } from '../../engine/version';
 import {
@@ -47,7 +47,7 @@ type Drag =
   | { kind: 'boxselect'; start: Pt; additive: boolean }
   | { kind: 'marquee'; start: Pt; mode: SelectionMode; ellipse: boolean }
   | { kind: 'lasso'; mode: SelectionMode }
-  | { kind: 'stroke'; stroke: Stroke; label: string }
+  | { kind: 'stroke'; stroke: Stroke; label: string; grow: { id: string; orig: Rect; before: RasterLayer } | null }
   | { kind: 'selectBrush'; stroke: Stroke; subtract: boolean }
   | { kind: 'crop'; mode: 'new' | 'move' | Exclude<HandleId, 'rot'>; start: Pt; orig: Rect }
   | { kind: 'gradient'; a: Pt }
@@ -162,15 +162,86 @@ function retouchKind(): ToolKind {
   return 'heal';
 }
 
+/** Topmost visible, unlocked layer under a point (what the user is pointing at). */
+function editableLayerAt(p: Pt): Layer | null {
+  const doc = S().doc!;
+  for (let i = doc.layers.length - 1; i >= 0; i--) {
+    const l = doc.layers[i];
+    if (!l.locked && hitLayer(l, p, true)) return l;
+  }
+  return null;
+}
+
+/** With nothing selected, pixel tools work on the layer under the pointer instead of failing. */
+function pickLayerIfNone(p: Pt): Layer | undefined {
+  const cur = activeLayer();
+  if (cur) return cur;
+  const hit = editableLayerAt(p);
+  if (hit) selectLayers([hit.id]);
+  return hit || undefined;
+}
+
+const MAX_GROW_PIXELS = 40e6;
+
+/** The same raster layer on a canvas covering local rect `r` (which may extend past its pixels), kept in place. */
+function reframeRaster(l: RasterLayer, r: Rect, keepPos?: RasterLayer): RasterLayer {
+  const c = createCanvas(r.w, r.h);
+  ctx2d(c).drawImage(l.canvas, -r.x, -r.y);
+  if (keepPos) return { ...l, canvas: c, x: keepPos.x, y: keepPos.y };
+  const center = applyMatrix(layerMatrix(l), r.x + r.w / 2, r.y + r.h / 2);
+  return { ...l, canvas: c, x: center.x, y: center.y };
+}
+
+/**
+ * Photoshop layers are unbounded, so painting next to a smaller photo should not be cut off.
+ * Grows the layer to cover the document for the stroke; `trimGrown` shrinks it back afterwards.
+ */
+function growToDocument(l: RasterLayer, doc: Doc): { layer: RasterLayer; orig: Rect } | null {
+  if (l.clip || l.mask) return null;
+  const inv = layerMatrix(l).inverse();
+  const b = boundsOfPoints([applyMatrix(inv, 0, 0), applyMatrix(inv, doc.width, 0), applyMatrix(inv, doc.width, doc.height), applyMatrix(inv, 0, doc.height)]);
+  const W = l.canvas.width,
+    H = l.canvas.height;
+  const x0 = Math.min(0, Math.floor(b.x + 1e-6)),
+    y0 = Math.min(0, Math.floor(b.y + 1e-6));
+  const x1 = Math.max(W, Math.ceil(b.x + b.w - 1e-6)),
+    y1 = Math.max(H, Math.ceil(b.y + b.h - 1e-6));
+  const w = x1 - x0,
+    h = y1 - y0;
+  if (w === W && h === H) return null;
+  if (w * h > MAX_GROW_PIXELS || w > 16384 || h > 16384) return null;
+  return { layer: reframeRaster(l, { x: x0, y: y0, w, h }), orig: { x: -x0, y: -y0, w: W, h: H } };
+}
+
+/** Crops a grown layer back to its original pixels plus whatever the stroke touched. */
+function trimGrown(l: RasterLayer, orig: Rect, touched: Rect | null, before: RasterLayer): RasterLayer {
+  const W = l.canvas.width,
+    H = l.canvas.height;
+  let k = orig;
+  if (touched) {
+    const u = unionRects([orig, touched])!;
+    const x0 = Math.max(0, Math.floor(u.x)),
+      y0 = Math.max(0, Math.floor(u.y));
+    k = { x: x0, y: y0, w: Math.min(W, Math.ceil(u.x + u.w)) - x0, h: Math.min(H, Math.ceil(u.y + u.h)) - y0 };
+  }
+  if (k.x === 0 && k.y === 0 && k.w === W && k.h === H) return l;
+  const same = k.x === orig.x && k.y === orig.y && k.w === orig.w && k.h === orig.h;
+  return reframeRaster(l, k, same ? before : undefined);
+}
+
 function startStroke(e: PointerEvent, p: Pt): boolean {
   const s = S();
   const doc = s.doc!;
   const kind = retouchKind();
-  let l = activeLayer();
   const paintingTool = kind === 'brush' || kind === 'pencil';
+  let l = paintingTool ? activeLayer() : pickLayerIfNone(p);
 
   if (l && l.locked) {
     toast('This layer is locked', 'error');
+    return false;
+  }
+  if (l && !l.visible) {
+    toast('This layer is hidden. Show it to edit it.', 'error');
     return false;
   }
   // Painting on a vector layer (or nothing) creates a new pixel layer, like Canva's draw tool.
@@ -179,7 +250,7 @@ function startStroke(e: PointerEvent, p: Pt): boolean {
     addLayer(layer, 'New layer');
     l = layer;
   } else if (!l) {
-    toast('Select a layer first', 'error');
+    toast(doc.layers.length ? 'Click on a photo or layer to edit it' : 'Add a photo first', 'error');
     return false;
   } else if (l.type !== 'raster' && !(s.editMask && l.mask)) {
     const r = ensureRasterActive();
@@ -188,12 +259,21 @@ function startStroke(e: PointerEvent, p: Pt): boolean {
   }
   const cur = S().doc!;
   l = cur.layers.find((x) => x.id === l!.id)!;
+  const before = l;
   const useMask = S().editMask && !!l.mask;
-  const target = useMask ? l.mask! : (l as Extract<Layer, { type: 'raster' }>).canvas;
-  const canvas = cloneCanvas(target);
-  const nextLayer = (useMask ? { ...l, mask: canvas } : { ...l, canvas }) as Layer;
+  // Tools that add pixels may reach past the layer's edges.
+  const grow = !useMask && l.type === 'raster' && (paintingTool || kind === 'clone') ? growToDocument(l, cur) : null;
+  let canvas: HTMLCanvasElement;
+  if (grow) {
+    l = grow.layer;
+    canvas = grow.layer.canvas;
+  } else {
+    const target = useMask ? l.mask! : (l as RasterLayer).canvas;
+    canvas = cloneCanvas(target);
+    l = (useMask ? { ...l, mask: canvas } : { ...l, canvas }) as Layer;
+  }
   beginLive();
-  live(replaceLayer(cur, nextLayer));
+  live(replaceLayer(cur, l));
 
   const { w, h } = layerSize(l);
   const toLocal = new DOMMatrix().scale(canvas.width / w, canvas.height / h).multiply(layerMatrix(l).inverse());
@@ -210,16 +290,20 @@ function startStroke(e: PointerEvent, p: Pt): boolean {
   const o = s.opts;
   const paint = kind === 'brush' || kind === 'pencil' ? o.brush : kind === 'eraser' ? o.eraser : kind === 'clone' ? o.clone : kind === 'heal' ? o.heal : o.retouch;
   let cloneOffset: Pt | undefined;
-  if (kind === 'clone') {
-    if (!s.cloneSource) {
-      cancelLive();
-      toast('Alt+click to set a clone source first', 'error');
-      return false;
-    }
-    if (!ix.cloneAnchor) ix.cloneAnchor = { x: s.cloneSource.x - p.x, y: s.cloneSource.y - p.y };
+  let cloneSrc: HTMLCanvasElement | undefined;
+  if (kind === 'clone' && s.cloneSource) {
+    // Aligned: the source keeps its offset from the brush across strokes; otherwise every stroke restarts at the source.
+    if (!o.cloneAligned || !ix.cloneAnchor) ix.cloneAnchor = { x: s.cloneSource.x - p.x, y: s.cloneSource.y - p.y };
     const src = applyMatrix(toLocal, p.x + ix.cloneAnchor.x, p.y + ix.cloneAnchor.y);
     const dst = applyMatrix(toLocal, p.x, p.y);
     cloneOffset = { x: src.x - dst.x, y: src.y - dst.y };
+    if (o.cloneSampleAll) {
+      // Copy what is visible (all layers), e.g. to clone onto an empty layer non-destructively.
+      cloneSrc = createCanvas(canvas.width, canvas.height);
+      const cctx = ctx2d(cloneSrc);
+      cctx.setTransform(toLocal);
+      cctx.drawImage(getComposite(), 0, 0);
+    }
   }
   const stroke = new Stroke(canvas, {
     tool: kind,
@@ -229,6 +313,7 @@ function startStroke(e: PointerEvent, p: Pt): boolean {
     localScale,
     selMask,
     cloneOffset,
+    cloneSrc,
     strength: o.strength,
     range: o.dodgeRange,
     spongeMode: 'saturate',
@@ -250,9 +335,17 @@ function startStroke(e: PointerEvent, p: Pt): boolean {
     burn: 'Burn',
     sponge: 'Sponge',
   };
-  ix.drag = { kind: 'stroke', stroke, label: labels[kind] || 'Paint' };
+  ix.drag = { kind: 'stroke', stroke, label: labels[kind] || 'Paint', grow: grow ? { id: l.id, orig: grow.orig, before: before as RasterLayer } : null };
   invalidate();
   return true;
+}
+
+/** Sets the clone stamp source (Alt+click, the "Set source" button, or the first click). */
+function setCloneSource(p: Pt, first: boolean) {
+  pickLayerIfNone(p);
+  setS({ cloneSource: p, pickCloneSource: false });
+  ix.cloneAnchor = null;
+  toast(first ? 'Source set. Now paint where you want to copy it to.' : 'Clone source set');
 }
 
 function createRasterLayerForPaint(doc: Doc) {
@@ -474,10 +567,8 @@ export function pointerDown(e: PointerEvent, sp: { x: number; y: number }) {
     case 'blur':
     case 'dodge':
     case 'clone': {
-      if (e.altKey && tool === 'clone') {
-        setS({ cloneSource: p });
-        ix.cloneAnchor = null;
-        toast('Clone source set');
+      if (tool === 'clone' && (e.altKey || s.pickCloneSource || !s.cloneSource)) {
+        setCloneSource(p, !s.cloneSource && !e.altKey);
         return;
       }
       if (e.altKey && tool === 'brush') {
@@ -893,6 +984,12 @@ export function pointerUp(e: PointerEvent) {
     case 'stroke': {
       const changed = d.stroke.end();
       touchCanvas(d.stroke.target);
+      if (changed && d.grow) {
+        const doc = S().doc!;
+        const g = d.grow;
+        const l = doc.layers.find((x) => x.id === g.id);
+        if (l && l.type === 'raster') live(replaceLayer(doc, trimGrown(l, g.orig, d.stroke.touched, g.before)));
+      }
       if (changed) endLive(d.label);
       else cancelLive();
       invalidate();
@@ -1020,6 +1117,7 @@ export function cursorFor(): string {
     if (pointInFrame(f, p)) return 'move';
     return 'crosshair';
   }
+  if (tool === 'clone' && (s.pickCloneSource || !s.cloneSource)) return 'crosshair';
   switch (tool) {
     case 'text':
       return 'text';

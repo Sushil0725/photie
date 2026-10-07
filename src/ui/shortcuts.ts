@@ -72,6 +72,12 @@ export function onKeyDown(e: KeyboardEvent) {
   ix.alt = e.altKey;
   ix.shift = e.shiftKey;
   ix.ctrl = mod;
+  // Alt alone would focus the browser menu on Windows and swallow the next Alt+click (clone source, eyedropper).
+  if (e.key === 'Alt') {
+    e.preventDefault();
+    invalidate();
+    return;
+  }
 
   if (e.key === ' ') {
     e.preventDefault();
@@ -289,6 +295,7 @@ export function onKeyDown(e: KeyboardEvent) {
 }
 
 export function onKeyUp(e: KeyboardEvent) {
+  if (e.key === 'Alt' && S().screen === 'editor' && !isTyping(e.target)) e.preventDefault();
   ix.alt = e.altKey;
   ix.shift = e.shiftKey;
   ix.ctrl = e.ctrlKey || e.metaKey;

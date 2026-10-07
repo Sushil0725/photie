@@ -15,7 +15,8 @@ import { fitToScreen } from './view';
 
 export function openDoc(doc: Doc, label = 'Open') {
   resetHistory(doc, label);
-  setS({ screen: 'editor', saveState: 'idle' });
+  // An opened photo is ready to edit straight away (no need to click it first).
+  setS({ screen: 'editor', saveState: 'idle', selectedIds: doc.layers.length === 1 ? [doc.layers[0].id] : [] });
   const fonts = doc.layers.filter((l) => l.type === 'text').map((l) => (l as { font: string }).font);
   if (fonts.length) loadFonts(fonts);
   requestAnimationFrame(() => fitToScreen());

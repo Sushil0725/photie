@@ -45,6 +45,10 @@ export interface ToolOptions {
   tolerance: number;
   contiguous: boolean;
   sampleAll: boolean;
+  /** Clone stamp: keep the source offset between strokes (Photoshop "Aligned"). */
+  cloneAligned: boolean;
+  /** Clone stamp: copy from everything visible instead of only the active layer. */
+  cloneSampleAll: boolean;
   brush: PaintOpts;
   eraser: PaintOpts;
   clone: PaintOpts;
@@ -123,6 +127,8 @@ export interface EditorState {
   saveState: 'saved' | 'saving' | 'unsaved' | 'idle';
   busy: string | null;
   cloneSource: { x: number; y: number } | null;
+  /** Clone stamp: the next canvas click sets the source point (for touch / no Alt key). */
+  pickCloneSource: boolean;
   clipboard: { layers: Layer[] } | { canvas: HTMLCanvasElement; x: number; y: number } | null;
   viewport: { w: number; h: number };
   /** Active crop rectangle while the crop tool is in use (document coordinates). */
@@ -146,6 +152,8 @@ export const initialOptions: ToolOptions = {
   tolerance: 32,
   contiguous: true,
   sampleAll: false,
+  cloneAligned: true,
+  cloneSampleAll: false,
   brush: defaultPaint(24, 0.75),
   eraser: defaultPaint(40, 0.8),
   clone: defaultPaint(50, 0.6),
@@ -196,6 +204,7 @@ export const useEditor = create<EditorState>()(() => ({
   saveState: 'idle',
   busy: null,
   cloneSource: null,
+  pickCloneSource: false,
   clipboard: null,
   viewport: { w: 800, h: 600 },
   cropRect: null,
@@ -318,6 +327,8 @@ export function resetHistory(doc: Doc, label = 'Open') {
     editMask: false,
     preview: null,
     editingTextId: null,
+    cloneSource: null,
+    pickCloneSource: false,
   });
 }
 

@@ -123,6 +123,8 @@ export interface StrokeConfig {
   selMask: HTMLCanvasElement | null;
   /** Clone: offset from destination to source in target pixels. */
   cloneOffset?: Pt;
+  /** Clone: pixels to copy from (target space); defaults to the target as it was before the stroke. */
+  cloneSrc?: HTMLCanvasElement;
   /** Strength for smudge/blur/sharpen/dodge/burn/sponge (0..1). */
   strength?: number;
   /** Dodge/burn range. */
@@ -219,13 +221,16 @@ export class Stroke {
       case 'clone': {
         const off = this.cfg.cloneOffset || { x: 0, y: 0 };
         const s = Math.max(2, Math.ceil(size));
+        // Whole-pixel positions so copied detail is not resampled (and blurred) on every dab.
+        const dx = Math.round(x - s / 2),
+          dy = Math.round(y - s / 2);
         const { c, ctx } = tmpCanvas(s, s);
-        ctx.drawImage(this.base, x - r + off.x, y - r + off.y, s, s, 0, 0, s, s);
+        ctx.drawImage(this.cfg.cloneSrc || this.base, dx + Math.round(off.x), dy + Math.round(off.y), s, s, 0, 0, s, s);
         ctx.globalCompositeOperation = 'destination-in';
         ctx.drawImage(getStamp(s, b.hardness, '#000'), 0, 0);
         const bctx = ctx2d(this.buffer!);
         bctx.globalAlpha = b.flow;
-        bctx.drawImage(c, 0, 0, s, s, x - r, y - r, s, s);
+        bctx.drawImage(c, 0, 0, s, s, dx, dy, s, s);
         break;
       }
       case 'smudge':

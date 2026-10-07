@@ -16,6 +16,7 @@ import {
   SquaresIntersect,
   Eraser as EraserIcon,
   RotateCcw,
+  Crosshair,
 } from 'lucide-react';
 import { SHAPE_LABELS } from '../engine/shapes';
 import type { SelectionMode, ShapeKind } from '../engine/types';
@@ -116,6 +117,8 @@ export function OptionsBar() {
   const crop = useEditor((s) => s.cropRect);
   const editMask = useEditor((s) => s.editMask);
   const nSel = useEditor((s) => s.selectedIds.length);
+  const pickSource = useEditor((s) => s.pickCloneSource);
+  const hasSource = useEditor((s) => !!s.cloneSource);
   const def = TOOLS.find((t) => t.id === tool)!;
 
   let body: React.ReactNode = null;
@@ -275,8 +278,25 @@ export function OptionsBar() {
     case 'clone':
       body = (
         <>
+          <button
+            className={'btn small' + (pickSource ? ' primary' : ' ghost')}
+            onClick={() => setS({ pickCloneSource: !pickSource })}
+            title="Click, then tap the area to copy from (or Alt+click on the canvas)"
+          >
+            <Crosshair size={14} /> {pickSource ? 'Tap the source…' : hasSource ? 'Change source' : 'Set source'}
+          </button>
           <PaintControls k="clone" />
-          <span className="opt-hint">Alt+click to set the source point.</span>
+          <CheckBox checked={o.cloneAligned} onChange={(v) => setOpts({ cloneAligned: v })} label="Aligned" />
+          <Select
+            value={o.cloneSampleAll ? 'all' : 'layer'}
+            options={[
+              { value: 'layer', label: 'Sample: Current layer' },
+              { value: 'all', label: 'Sample: All layers' },
+            ]}
+            onChange={(v) => setOpts({ cloneSampleAll: v === 'all' })}
+            title="Which pixels to copy from"
+          />
+          <span className="opt-hint">{hasSource ? 'Paint to copy. Alt+click picks a new source.' : 'Click (or Alt+click) the area to copy from.'}</span>
         </>
       );
       break;
