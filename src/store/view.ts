@@ -8,10 +8,13 @@ export const MAX_ZOOM = 32;
 export function fitToScreen() {
   const s = S();
   if (!s.doc) return;
-  const { w, h } = s.viewport;
-  const margin = Math.min(80, Math.max(24, Math.min(w, h) * 0.08));
+  const { w: vw, h } = s.viewport;
+  // On phones the tool strip floats over the left edge of the canvas; keep the design clear of it.
+  const inset = window.matchMedia('(max-width: 700px)').matches ? 50 : 0;
+  const w = vw - inset;
+  const margin = inset ? 12 : Math.min(80, Math.max(24, Math.min(w, h) * 0.08));
   const zoom = Math.max(MIN_ZOOM, Math.min(4, Math.min((w - margin * 2) / s.doc.width, (h - margin * 2) / s.doc.height)));
-  setS({ zoom, panX: (w - s.doc.width * zoom) / 2, panY: (h - s.doc.height * zoom) / 2 });
+  setS({ zoom, panX: inset + (w - s.doc.width * zoom) / 2, panY: (h - s.doc.height * zoom) / 2 });
 }
 
 /** Sets zoom, keeping the given screen point fixed (defaults to the viewport center). */
