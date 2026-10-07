@@ -3,7 +3,7 @@ import { fillPrimary, fillStyle } from './fill';
 import { boundsOfPoints, intersectRects, layerMatrix, layerSize, applyMatrix, unionRects, layerBounds } from './geometry';
 import { isLineShape, shapePath } from './shapes';
 import { drawText } from './text';
-import type { Doc, Layer, RasterLayer, Rect, ShapeLayer } from './types';
+import type { Doc, Layer, LayerGroup, RasterLayer, Rect, ShapeLayer } from './types';
 import { createCanvas, ctx2d, withAlpha } from './util';
 
 export interface RenderOptions {
@@ -194,6 +194,48 @@ export function renderLayer(ctx: CanvasRenderingContext2D, l: Layer, opts: Rende
   ctx.restore();
 }
 
+let groupBuffer: HTMLCanvasElement | null = null;
+
+/**
+ * Renders layers in order. A group with normal blending at full opacity passes its members straight
+ * through; otherwise the members are composited together first, then blended as one (like Photoshop).
+ */
+export function renderLayers(ctx: CanvasRenderingContext2D, layers: Layer[], opts: RenderOptions, groups?: LayerGroup[]) {
+  const byId = groups?.length ? new Map(groups.map((g) => [g.id, g])) : null;
+  for (let i = 0; i < layers.length; i++) {
+    const g = byId && layers[i].group ? byId.get(layers[i].group!) : undefined;
+    if (!g) {
+      renderLayer(ctx, layers[i], opts);
+      continue;
+    }
+    let j = i;
+    while (j + 1 < layers.length && layers[j + 1].group === g.id) j++;
+    const run = layers.slice(i, j + 1);
+    i = j;
+    if (g.opacity >= 1 && g.blend === 'source-over') {
+      for (const m of run) renderLayer(ctx, m, opts);
+      continue;
+    }
+    if (g.opacity <= 0) continue;
+    const { width: W, height: H } = ctx.canvas;
+    if (!groupBuffer) groupBuffer = createCanvas(W, H);
+    if (groupBuffer.width !== W || groupBuffer.height !== H) {
+      groupBuffer.width = W;
+      groupBuffer.height = H;
+    }
+    const gctx = ctx2d(groupBuffer);
+    gctx.setTransform(1, 0, 0, 1, 0, 0);
+    gctx.clearRect(0, 0, W, H);
+    for (const m of run) renderLayer(gctx, m, opts);
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = g.opacity;
+    ctx.globalCompositeOperation = g.blend;
+    ctx.drawImage(groupBuffer, 0, 0);
+    ctx.restore();
+  }
+}
+
 export function renderDoc(ctx: CanvasRenderingContext2D, doc: Doc, opts: RenderOptions, layers: Layer[] = doc.layers) {
   ctx.save();
   ctx.setTransform(opts.base);
@@ -206,7 +248,7 @@ export function renderDoc(ctx: CanvasRenderingContext2D, doc: Doc, opts: RenderO
     ctx.fillStyle = fillStyle(ctx, doc.background, 0, 0, doc.width, doc.height);
     ctx.fillRect(0, 0, doc.width, doc.height);
   }
-  for (const l of layers) renderLayer(ctx, l, opts);
+  renderLayers(ctx, layers, opts, doc.groups);
   ctx.restore();
 }
 
@@ -224,12 +266,12 @@ export function renderDocToCanvas(doc: Doc, scale = 1, background = true): HTMLC
 }
 
 /** Renders layers into a canvas covering `rect` (document coordinates) at 1:1. */
-export function renderLayersToRect(layers: Layer[], rect: Rect, opts: Partial<RenderOptions> = {}): HTMLCanvasElement {
+export function renderLayersToRect(layers: Layer[], rect: Rect, opts: Partial<RenderOptions> = {}, groups?: LayerGroup[]): HTMLCanvasElement {
   const c = createCanvas(rect.w, rect.h);
   const ctx = ctx2d(c);
   const ro: RenderOptions = { base: new DOMMatrix().translate(-rect.x, -rect.y), scale: 1, quality: 'high', ...opts };
   ctx.save();
-  for (const l of layers) renderLayer(ctx, l, ro);
+  renderLayers(ctx, layers, ro, groups);
   ctx.restore();
   return c;
 }

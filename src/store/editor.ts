@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import type { Doc, Layer, Rect, Selection, SelectionMode, ShapeKind } from '../engine/types';
+import type { Doc, Layer, LayerGroup, Rect, Selection, SelectionMode, ShapeKind } from '../engine/types';
+import { normalizeGroups } from '../engine/groups';
 
 export type ToolId =
   | 'move'
@@ -100,6 +101,8 @@ export interface EditorState {
   screen: 'home' | 'editor';
   doc: Doc | null;
   selectedIds: string[];
+  /** Set when a whole layer group was picked (its header or a member on the canvas); cleared by other selections. */
+  selectedGroupId: string | null;
   /** When true, painting tools edit the active layer's mask. */
   editMask: boolean;
   selection: Selection | null;
@@ -129,7 +132,7 @@ export interface EditorState {
   cloneSource: { x: number; y: number } | null;
   /** Clone stamp: the next canvas click sets the source point (for touch / no Alt key). */
   pickCloneSource: boolean;
-  clipboard: { layers: Layer[] } | { canvas: HTMLCanvasElement; x: number; y: number } | null;
+  clipboard: { layers: Layer[]; groups?: LayerGroup[] } | { canvas: HTMLCanvasElement; x: number; y: number } | null;
   viewport: { w: number; h: number };
   /** Active crop rectangle while the crop tool is in use (document coordinates). */
   cropRect: Rect | null;
@@ -179,6 +182,7 @@ export const useEditor = create<EditorState>()(() => ({
   screen: 'home',
   doc: null,
   selectedIds: [],
+  selectedGroupId: null,
   editMask: false,
   selection: null,
   tool: 'move',
@@ -264,6 +268,7 @@ export function presentEntry(): HistoryEntry {
 export function commit(label: string, doc: Doc, extra: Partial<EditorState> = {}) {
   const s = S();
   if (!s.doc) return;
+  doc = normalizeGroups(doc);
   const prev = liveBase || presentEntry();
   liveBase = null;
   const next: Partial<EditorState> = {

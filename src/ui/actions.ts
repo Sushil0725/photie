@@ -20,6 +20,8 @@ import {
   trimTransparent,
 } from '../store/image';
 import {
+  groupSelected,
+  ungroupSelected,
   addLayer,
   addMask,
   align,
@@ -230,6 +232,9 @@ export function buildMenus(): { id: string; label: string; items: MenuItem[] }[]
         { label: 'New Text Layer', action: cmd.addText, disabled: !hasDoc },
         { label: 'Duplicate Layer', shortcut: kb('Mod+J'), action: cmd.layerViaCopy, disabled: !nSel },
         { label: 'Delete Layer', action: () => deleteLayers(), disabled: !nSel },
+        { divider: true },
+        { label: 'Group Layers', shortcut: kb('Mod+G'), action: groupSelected, disabled: !nSel },
+        { label: 'Ungroup Layers', shortcut: kb('Mod+Shift+G'), action: ungroupSelected, disabled: !selectedLayers().some((l) => l.group) },
         { divider: true },
         {
           label: 'Layer Mask',

@@ -1,7 +1,8 @@
 import { createRasterLayer } from './document';
 import { layerBounds } from './geometry';
 import { renderDocToCanvas, renderLayer } from './render';
-import type { BlendMode, Doc, Layer } from './types';
+import type { BlendMode, Doc, Layer, LayerGroup } from './types';
+import { normalizeGroups } from './groups';
 import { canvasToBlob, createCanvas, ctx2d, uid } from './util';
 
 export type ExportFormat = 'png' | 'jpeg' | 'webp' | 'pdf' | 'psd';
@@ -103,25 +104,32 @@ function rasterizeForExport(l: Layer) {
 
 export async function exportPsd(doc: Doc): Promise<Blob> {
   const { writePsd } = await import('ag-psd');
-  const children = doc.layers.map((l) => {
+  const toNode = (l: Layer): PsdNode => {
     const r = rasterizeForExport(l);
-    return {
-      name: l.name,
-      canvas: r.canvas,
-      left: r.left,
-      top: r.top,
-      opacity: l.opacity,
-      hidden: !l.visible,
-      blendMode: toPsdBlend[l.blend] as never,
-    };
-  });
+    return { name: l.name, canvas: r.canvas, left: r.left, top: r.top, opacity: l.opacity, hidden: !l.visible, blendMode: toPsdBlend[l.blend] };
+  };
+  // Layer groups become Photoshop group folders.
+  const children: PsdNode[] = [];
+  for (let i = 0; i < doc.layers.length; i++) {
+    const l = doc.layers[i];
+    const g = l.group ? doc.groups?.find((x) => x.id === l.group) : undefined;
+    if (!g) {
+      children.push(toNode(l));
+      continue;
+    }
+    const kids: PsdNode[] = [];
+    while (i < doc.layers.length && doc.layers[i].group === g.id) kids.push(toNode(doc.layers[i++]));
+    i--;
+    const passThrough = g.blend === 'source-over' && g.opacity >= 1;
+    children.push({ name: g.name, opacity: g.opacity, hidden: false, blendMode: passThrough ? 'pass through' : toPsdBlend[g.blend], opened: !g.collapsed, children: kids });
+  }
   if (doc.background) {
     const bg = createCanvas(doc.width, doc.height);
     const bgDoc: Doc = { ...doc, layers: [] };
     ctx2d(bg).drawImage(renderDocToCanvas(bgDoc), 0, 0);
-    children.unshift({ name: 'Background', canvas: bg, left: 0, top: 0, opacity: 1, hidden: false, blendMode: 'normal' as never });
+    children.unshift({ name: 'Background', canvas: bg, left: 0, top: 0, opacity: 1, hidden: false, blendMode: 'normal' });
   }
-  const buffer = writePsd({ width: doc.width, height: doc.height, children, canvas: renderDocToCanvas(doc) }, { generateThumbnail: true });
+  const buffer = writePsd({ width: doc.width, height: doc.height, children: children as never, canvas: renderDocToCanvas(doc) }, { generateThumbnail: true });
   return new Blob([buffer], { type: 'image/vnd.adobe.photoshop' });
 }
 
@@ -133,6 +141,7 @@ interface PsdNode {
   opacity?: number;
   hidden?: boolean;
   blendMode?: string;
+  opened?: boolean;
   children?: PsdNode[];
 }
 
@@ -140,21 +149,32 @@ export async function importPsd(file: Blob, name: string): Promise<Doc> {
   const { readPsd } = await import('ag-psd');
   const psd = readPsd(await file.arrayBuffer()) as unknown as PsdNode & { width: number; height: number };
   const layers: Layer[] = [];
-  const walk = (nodes: PsdNode[] | undefined, hiddenParent: boolean) => {
+  const groups: LayerGroup[] = [];
+  // Top-level folders become groups; nested folders are folded into them (Photie groups do not nest).
+  const walk = (nodes: PsdNode[] | undefined, hiddenParent: boolean, group: string | null, opacity: number) => {
     for (const n of nodes || []) {
       if (n.children) {
-        walk(n.children, hiddenParent || !!n.hidden);
+        let gid = group;
+        let k = opacity;
+        if (!group) {
+          const blend = fromPsdBlend[n.blendMode || 'normal'] || 'source-over';
+          const g: LayerGroup = { id: uid(), name: n.name || 'Group', opacity: n.opacity ?? 1, blend, collapsed: n.opened === false };
+          groups.push(g);
+          gid = g.id;
+        } else k *= n.opacity ?? 1;
+        walk(n.children, hiddenParent || !!n.hidden, gid, k);
         continue;
       }
       if (!n.canvas || !n.canvas.width || !n.canvas.height) continue;
       const l = createRasterLayer(n.canvas, (n.left || 0) + n.canvas.width / 2, (n.top || 0) + n.canvas.height / 2, n.name || 'Layer');
-      l.opacity = n.opacity ?? 1;
+      l.opacity = (n.opacity ?? 1) * opacity;
       l.visible = !(n.hidden || hiddenParent);
       l.blend = fromPsdBlend[n.blendMode || 'normal'] || 'source-over';
+      l.group = group;
       layers.push(l);
     }
   };
-  walk(psd.children, false);
+  walk(psd.children, false, null, 1);
   if (!layers.length && psd.canvas) layers.push(createRasterLayer(psd.canvas, psd.width / 2, psd.height / 2, 'Background'));
-  return { id: uid(), name, width: psd.width, height: psd.height, background: null, layers };
+  return normalizeGroups({ id: uid(), name, width: psd.width, height: psd.height, background: null, layers, groups });
 }

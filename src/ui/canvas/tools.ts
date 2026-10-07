@@ -21,7 +21,8 @@ import {
   toast,
 } from '../../store/editor';
 import { applyCanvasOp, applySelection, magicWand, cropTo, deselect } from '../../store/image';
-import { addLayer, ensureRasterActive, selectLayers, toggleSelectLayer } from '../../store/layers';
+import { addLayer, ensureRasterActive, selectGroup, selectLayers, toggleSelectLayer } from '../../store/layers';
+import { expandToGroups, groupMembers } from '../../engine/groups';
 import { screenToDoc, setZoom, zoomIn, zoomOut } from '../../store/view';
 import {
   allowedHandles,
@@ -639,13 +640,25 @@ function moveDown(e: PointerEvent, p: Pt) {
   const hit = hitTopLayer(p, true);
   let ids = s.selectedIds;
   if (hit) {
+    const doc = s.doc!;
+    // Grouped layers are picked as a group (Canva-style); double-click picks one member.
+    const members = hit.group ? groupMembers(doc, hit.group).map((l) => l.id) : [hit.id];
     if (e.shiftKey) {
-      toggleSelectLayer(hit.id);
+      if (members.length === 1) toggleSelectLayer(hit.id);
+      else if (members.every((id) => ids.includes(id))) selectLayers(ids.filter((id) => !members.includes(id)));
+      else selectLayers([...new Set([...ids, ...members])]);
       return;
     }
+    // Already working inside this group (one member picked): clicking another member picks just that one.
+    const inside = hit.group && ids.length > 0 && ids.length < members.length && ids.every((id) => members.includes(id));
     if (!ids.includes(hit.id)) {
-      ids = [hit.id];
-      selectLayers(ids);
+      if (hit.group && !inside) {
+        selectGroup(hit.group);
+        ids = members;
+      } else {
+        ids = [hit.id];
+        selectLayers(ids);
+      }
     }
   } else if (sf && pointInFrame(sf.frame, p)) {
     // Clicked a transparent area inside the current selection box: keep moving it.
@@ -955,7 +968,7 @@ export function pointerUp(e: PointerEvent) {
           const b = layerBounds(l);
           return b.x < r.x + r.w && b.x + b.w > r.x && b.y < r.y + r.h && b.y + b.h > r.y && !(b.x <= 0 && b.y <= 0 && b.w >= s.doc!.width && b.h >= s.doc!.height);
         });
-        const ids = hits.map((l) => l.id);
+        const ids = expandToGroups(s.doc, hits.map((l) => l.id));
         selectLayers(d.additive ? [...new Set([...s.selectedIds, ...ids])] : ids);
       }
       break;
@@ -1088,6 +1101,11 @@ export function doubleClick(sp: { x: number; y: number }) {
   if (s.tool === 'move' || s.tool === 'text') {
     const hit = hitTopLayer(p, false);
     if (hit && hit.type === 'text') startTextEdit(hit.id);
+    else if (s.tool === 'move' && hit?.group) {
+      // Drill into a group to edit one of its layers.
+      const one = hitTopLayer(p, true);
+      if (one) selectLayers([one.id]);
+    }
   }
   if (s.tool === 'zoom') setZoom(1, sp);
 }

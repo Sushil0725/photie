@@ -1,14 +1,15 @@
 import { createEmptyRaster, createRasterLayer, duplicateLayer } from '../engine/document';
 import { layerBounds, layerMatrix, layerSize, unionRects } from '../engine/geometry';
+import { findGroup, groupMembers, groupOfSelection, nextGroupName } from '../engine/groups';
 import { drawLayerContent, layersRect, renderDocToCanvas, renderLayersToRect } from '../engine/render';
-import type { Doc, Layer, RasterLayer } from '../engine/types';
-import { createCanvas, ctx2d } from '../engine/util';
+import type { Doc, Layer, LayerGroup, RasterLayer } from '../engine/types';
+import { createCanvas, ctx2d, uid } from '../engine/util';
 import { S, activeLayer, commit, selectedLayers, setS, toast } from './editor';
 
 const docOf = (): Doc => S().doc!;
 
 export function selectLayers(ids: string[]) {
-  setS({ selectedIds: ids, editMask: false, editingTextId: null });
+  setS({ selectedIds: ids, selectedGroupId: null, editMask: false, editingTextId: null });
 }
 
 export function toggleSelectLayer(id: string) {
@@ -29,9 +30,10 @@ export function addLayer(layer: Layer, label = 'Add layer', index?: number) {
   commit(label, { ...doc, layers }, { selectedIds: [layer.id], editMask: false });
 }
 
-export function addLayers(newLayers: Layer[], label: string) {
+export function addLayers(newLayers: Layer[], label: string, groups: LayerGroup[] = []) {
   const doc = docOf();
-  commit(label, { ...doc, layers: [...doc.layers, ...newLayers] }, { selectedIds: newLayers.map((l) => l.id), editMask: false });
+  const next = { ...doc, layers: [...doc.layers, ...newLayers], groups: groups.length ? [...(doc.groups || []), ...groups] : doc.groups };
+  commit(label, next, { selectedIds: newLayers.map((l) => l.id), editMask: false, selectedGroupId: groups.length === 1 && newLayers.every((l) => l.group === groups[0].id) ? groups[0].id : null });
 }
 
 export function newEmptyLayer() {
@@ -54,17 +56,39 @@ export function duplicateLayers(ids = S().selectedIds, offset = 0) {
   const doc = docOf();
   if (!ids.length) return;
   const set = new Set(ids);
-  const layers: Layer[] = [];
-  const newIds: string[] = [];
-  for (const l of doc.layers) {
-    layers.push(l);
-    if (set.has(l.id)) {
-      const d = duplicateLayer(l, offset);
-      layers.push(d);
-      newIds.push(d.id);
+  // A group duplicated as a whole becomes a new group just above the original; single members stay in their group.
+  const groups = [...(doc.groups || [])];
+  const copyOf = new Map<string, string>();
+  for (const g of doc.groups || []) {
+    const m = groupMembers(doc, g.id);
+    if (m.length && m.every((l) => set.has(l.id))) {
+      const ng = { ...g, id: uid(), name: g.name.endsWith(' copy') ? g.name : g.name + ' copy' };
+      copyOf.set(g.id, ng.id);
+      groups.push(ng);
     }
   }
-  commit('Duplicate layer', { ...doc, layers }, { selectedIds: newIds });
+  const layers: Layer[] = [];
+  const newIds: string[] = [];
+  let pending: Layer[] = [];
+  doc.layers.forEach((l, i) => {
+    layers.push(l);
+    if (!set.has(l.id)) return;
+    const d = duplicateLayer(l, offset);
+    newIds.push(d.id);
+    const ng = l.group ? copyOf.get(l.group) : undefined;
+    if (!ng) {
+      layers.push(d);
+      return;
+    }
+    d.group = ng;
+    pending.push(d);
+    if (doc.layers[i + 1]?.group !== l.group) {
+      layers.push(...pending);
+      pending = [];
+    }
+  });
+  const single = copyOf.size === 1 && groupOfSelection(doc, ids) ? [...copyOf.values()][0] : null;
+  commit(copyOf.size ? 'Duplicate group' : 'Duplicate layer', { ...doc, layers, groups }, { selectedIds: newIds, selectedGroupId: single });
 }
 
 export function updateLayer(id: string, patch: Partial<Layer>, label = 'Edit layer') {
@@ -93,23 +117,152 @@ export function moveLayerTo(id: string, index: number) {
   commit('Reorder layers', { ...doc, layers });
 }
 
+/** Moves layer `id` directly above or below `targetId` and makes it a member of `group` (null = no group). */
+export function moveLayerNextTo(id: string, targetId: string, where: 'above' | 'below', group: string | null) {
+  const doc = docOf();
+  const layer = doc.layers.find((l) => l.id === id);
+  if (!layer) return;
+  if (id === targetId) {
+    // Dropped next to itself: only the group membership can change (e.g. dragged out of the top of its group).
+    if ((layer.group ?? null) !== group) commit('Reorder layers', { ...doc, layers: doc.layers.map((l) => (l.id === id ? ({ ...l, group } as Layer) : l)) });
+    return;
+  }
+  const layers = doc.layers.filter((l) => l.id !== id);
+  const t = layers.findIndex((l) => l.id === targetId);
+  if (t < 0) return;
+  layers.splice(where === 'above' ? t + 1 : t, 0, { ...layer, group } as Layer);
+  commit('Reorder layers', { ...doc, layers });
+}
+
+/** Moves a whole group above or below a layer (or that layer's group, since groups do not nest). */
+export function moveGroupNextTo(gid: string, targetId: string, where: 'above' | 'below') {
+  const doc = docOf();
+  const members = groupMembers(doc, gid);
+  const layers = doc.layers.filter((l) => l.group !== gid);
+  let t = layers.findIndex((l) => l.id === targetId);
+  if (!members.length || t < 0) return;
+  const tg = layers[t].group;
+  if (tg) {
+    const idx = layers.map((l, i) => (l.group === tg ? i : -1)).filter((i) => i >= 0);
+    t = where === 'above' ? idx[idx.length - 1] : idx[0];
+  }
+  layers.splice(where === 'above' ? t + 1 : t, 0, ...members);
+  commit('Reorder layers', { ...doc, layers });
+}
+
+function arrangeUnits<T>(units: T[], isSel: (u: T) => boolean, dir: 'front' | 'forward' | 'backward' | 'back'): T[] {
+  const u = [...units];
+  if (dir === 'front') return [...u.filter((x) => !isSel(x)), ...u.filter(isSel)];
+  if (dir === 'back') return [...u.filter(isSel), ...u.filter((x) => !isSel(x))];
+  if (dir === 'forward') {
+    for (let i = u.length - 2; i >= 0; i--) if (isSel(u[i]) && !isSel(u[i + 1])) [u[i], u[i + 1]] = [u[i + 1], u[i]];
+  } else {
+    for (let i = 1; i < u.length; i++) if (isSel(u[i]) && !isSel(u[i - 1])) [u[i], u[i - 1]] = [u[i - 1], u[i]];
+  }
+  return u;
+}
+
 export function arrange(dir: 'front' | 'forward' | 'backward' | 'back') {
   const doc = docOf();
   const set = new Set(S().selectedIds);
   if (!set.size) return;
-  let layers = [...doc.layers];
-  const sel = layers.filter((l) => set.has(l.id));
-  const rest = layers.filter((l) => !set.has(l.id));
-  if (dir === 'front') layers = [...rest, ...sel];
-  else if (dir === 'back') layers = [...sel, ...rest];
-  else if (dir === 'forward') {
-    for (let i = layers.length - 2; i >= 0; i--)
-      if (set.has(layers[i].id) && !set.has(layers[i + 1].id)) [layers[i], layers[i + 1]] = [layers[i + 1], layers[i]];
+  const sel = doc.layers.filter((l) => set.has(l.id));
+  const g = sel[0]?.group;
+  let layers: Layer[];
+  if (g && sel.every((l) => l.group === g) && doc.layers.some((l) => l.group === g && !set.has(l.id))) {
+    // Some members of one group: reorder inside the group.
+    const start = doc.layers.findIndex((l) => l.group === g);
+    const members = groupMembers(doc, g);
+    const moved = arrangeUnits(members, (l) => set.has(l.id), dir);
+    layers = [...doc.layers.slice(0, start), ...moved, ...doc.layers.slice(start + members.length)];
   } else {
-    for (let i = 1; i < layers.length; i++)
-      if (set.has(layers[i].id) && !set.has(layers[i - 1].id)) [layers[i], layers[i - 1]] = [layers[i - 1], layers[i]];
+    // Groups move as one block.
+    const units: Layer[][] = [];
+    for (const l of doc.layers) {
+      const last = units[units.length - 1];
+      if (l.group && last && last[0].group === l.group) last.push(l);
+      else units.push([l]);
+    }
+    layers = arrangeUnits(units, (u) => u.some((l) => set.has(l.id)), dir).flat();
   }
   commit('Arrange', { ...doc, layers });
+}
+
+/* ---------------------------------- Groups ---------------------------------- */
+
+/** Puts the selected layers into a new group where the topmost of them was (Ctrl+G). */
+export function groupSelected() {
+  const doc = docOf();
+  const set = new Set(S().selectedIds);
+  const sel = doc.layers.filter((l) => set.has(l.id));
+  if (!sel.length) {
+    toast('Select layers to group', 'error');
+    return;
+  }
+  const top = doc.layers.findIndex((l) => l.id === sel[sel.length - 1].id);
+  const rest = doc.layers.filter((l) => !set.has(l.id));
+  let at = doc.layers.slice(0, top).filter((l) => !set.has(l.id)).length;
+  // Never land inside another group (groups do not nest): move above it instead.
+  while (at > 0 && at < rest.length && rest[at - 1].group && rest[at - 1].group === rest[at].group) at++;
+  const group: LayerGroup = { id: uid(), name: nextGroupName(doc), opacity: 1, blend: 'source-over' };
+  const members = sel.map((l) => ({ ...l, group: group.id }) as Layer);
+  const layers = [...rest.slice(0, at), ...members, ...rest.slice(at)];
+  commit('Group layers', { ...doc, layers, groups: [...(doc.groups || []), group] }, { selectedIds: members.map((m) => m.id), selectedGroupId: group.id });
+}
+
+/** Dissolves the groups of the selected layers, keeping their layers (Ctrl+Shift+G). */
+export function ungroupSelected() {
+  const doc = docOf();
+  const set = new Set(S().selectedIds);
+  const gids = new Set(doc.layers.filter((l) => set.has(l.id) && l.group).map((l) => l.group!));
+  if (!gids.size) {
+    toast('The selection is not in a group', 'error');
+    return;
+  }
+  const layers = doc.layers.map((l) => (l.group && gids.has(l.group) ? ({ ...l, group: null } as Layer) : l));
+  commit('Ungroup layers', { ...doc, layers, groups: (doc.groups || []).filter((g) => !gids.has(g.id)) });
+}
+
+/** Group if the selection is loose layers, ungroup if it is exactly a group. */
+export function toggleGroup() {
+  if (selectedGroup()) ungroupSelected();
+  else groupSelected();
+}
+
+/** Updates a group's settings; without a label the change is not an undo step (e.g. collapsing). */
+export function updateGroup(id: string, patch: Partial<LayerGroup>, label?: string) {
+  const doc = docOf();
+  if (!findGroup(doc, id)) return;
+  const next = { ...doc, groups: (doc.groups || []).map((g) => (g.id === id ? { ...g, ...patch } : g)) };
+  if (label) commit(label, next);
+  else setS({ doc: next });
+}
+
+export function selectGroup(id: string, additive = false) {
+  const ids = groupMembers(docOf(), id).map((l) => l.id);
+  if (additive) selectLayers([...new Set([...S().selectedIds, ...ids])]);
+  else setS({ selectedIds: ids, selectedGroupId: id, editMask: false, editingTextId: null });
+}
+
+/** The group the user picked as a whole, if the selection still matches it. */
+export function selectedGroup(): LayerGroup | null {
+  const s = S();
+  if (!s.doc || !s.selectedGroupId) return null;
+  const g = groupOfSelection(s.doc, s.selectedIds);
+  return g && g.id === s.selectedGroupId ? g : null;
+}
+
+/** Shows or hides every member (hidden if any member is visible). */
+export function toggleGroupVisibility(id: string) {
+  const doc = docOf();
+  const show = !groupMembers(doc, id).some((l) => l.visible);
+  commit(show ? 'Show group' : 'Hide group', { ...doc, layers: doc.layers.map((l) => (l.group === id ? ({ ...l, visible: show } as Layer) : l)) });
+}
+
+export function toggleGroupLock(id: string) {
+  const doc = docOf();
+  const lock = !groupMembers(doc, id).every((l) => l.locked);
+  commit(lock ? 'Lock group' : 'Unlock group', { ...doc, layers: doc.layers.map((l) => (l.group === id ? ({ ...l, locked: lock } as Layer) : l)) });
 }
 
 /** Converts a text or shape layer into pixels, keeping its placement. */
@@ -144,8 +297,9 @@ export function rasterizeLayerObject(l: Layer): RasterLayer {
     adjust,
     shadow,
     maskEnabled,
+    group,
   } = l;
-  return { id, name, visible, locked, opacity, blend, x, y, rotation, scaleX, scaleY, adjust, shadow, mask, maskEnabled, type: 'raster', canvas: c };
+  return { id, name, visible, locked, opacity, blend, x, y, rotation, scaleX, scaleY, adjust, shadow, mask, maskEnabled, group, type: 'raster', canvas: c };
 }
 
 export function rasterizeSelected() {
@@ -192,6 +346,7 @@ export function mergeDown() {
   const merged = createRasterLayer(canvas, r.x + r.w / 2, r.y + r.h / 2, lower.name);
   merged.blend = lower.blend;
   merged.visible = lower.visible;
+  merged.group = lower.group;
   const layers = [...doc.layers];
   layers.splice(i - 1, 2, merged);
   commit('Merge down', { ...doc, layers }, { selectedIds: [merged.id] });
@@ -203,8 +358,11 @@ export function mergeSelected() {
   if (sel.length < 2) return mergeDown();
   const rect = layersRect(sel);
   if (!rect) return;
-  const canvas = renderLayersToRect(sel, rect);
+  // Layers of one group stay in it (the group still applies its opacity); otherwise bake group effects in.
+  const sameGroup = sel.every((l) => l.group && l.group === sel[0].group) ? sel[0].group : null;
+  const canvas = renderLayersToRect(sel, rect, {}, sameGroup ? undefined : doc.groups);
   const merged = createRasterLayer(canvas, rect.x + rect.w / 2, rect.y + rect.h / 2, sel[sel.length - 1].name);
+  merged.group = sameGroup;
   const topIndex = doc.layers.findIndex((l) => l.id === sel[sel.length - 1].id);
   const set = new Set(sel.map((l) => l.id));
   const layers: Layer[] = [];
@@ -219,7 +377,7 @@ export function mergeVisible() {
   const doc = docOf();
   const vis = doc.layers.filter((l) => l.visible);
   if (!vis.length) return;
-  const canvas = renderLayersToRect(vis, { x: 0, y: 0, w: doc.width, h: doc.height });
+  const canvas = renderLayersToRect(vis, { x: 0, y: 0, w: doc.width, h: doc.height }, {}, doc.groups);
   const merged = createRasterLayer(canvas, doc.width / 2, doc.height / 2, 'Merged');
   const layers = [...doc.layers.filter((l) => !l.visible), merged];
   commit('Merge visible', { ...doc, layers }, { selectedIds: [merged.id] });

@@ -1669,6 +1669,33 @@ input[type='range']::-moz-range-thumb {
   height: 24px;
   padding: 2px 6px;
 }
+.layer-row.in-group {
+  margin-left: 18px;
+}
+.layer-row.in-group::after {
+  content: '';
+  position: absolute;
+  left: -10px;
+  top: 0;
+  bottom: 0;
+  border-left: 1px solid var(--border);
+}
+.layer-row.in-group.drop-below::after {
+  left: 4px;
+  top: auto;
+  bottom: -1px;
+  border-left: 0;
+}
+.group-chevron {
+  margin: 0 -4px;
+}
+.thumb-wrap.group-thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
 .background-row {
   margin-top: 2px;
   border-top: 1px dashed var(--border);

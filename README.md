@@ -11,9 +11,10 @@ Photie is a full-featured image editor and graphic design tool that runs entirel
 
 ### Photoshop-style editing
 - **Layers**: pixel, text and shape layers, opacity, 16 blend modes, lock / hide, reorder (drag & drop), rename, duplicate, merge down / merge visible / flatten, rasterize
+- **Layer groups**: group / ungroup (`Ctrl+G` / `Ctrl+Shift+G`), group opacity & blend mode, collapse, drag layers in and out, move and duplicate whole groups; kept in PSD files
 - **Layer masks**: add from selection, paint to hide/reveal, invert, apply, disable
 - **Selections**: rectangular & elliptical marquee, freehand & polygonal lasso, magic wand (tolerance, contiguous, sample all layers), selection brush, **AI object select** (click an object), **AI select subject**, add / subtract / intersect modes, feather, expand, contract, border, inverse, select layer pixels
-- **Retouching tools**: brush & pencil (pen pressure), eraser & magic eraser, clone stamp, **healing brush / magic eraser** (content-aware), blur / sharpen / smudge, dodge / burn / sponge, paint bucket, gradient tool (linear, radial, angle, reflected)
+- **Retouching tools**: brush & pencil (pen pressure), eraser & magic eraser, clone stamp (aligned, sample current or all layers, works on touch), **healing brush / magic eraser** (content-aware), blur / sharpen / smudge, dodge / burn / sponge, paint bucket, gradient tool (linear, radial, angle, reflected)
 - **Content-aware fill**: remove the selected area and fill it from the surroundings
 - **AI background removal** (on-device, MediaPipe) as an editable mask
 - **Adjustments**: Brightness/Contrast, Levels (with histogram), Curves (per channel), Exposure, Vibrance, Hue/Saturation (colorize), Color Balance, Black & White (with tint), Photo Filter, Shadows/Highlights, Gradient Map, Posterize, Threshold, Invert, Desaturate, Sepia, Auto Tone / Contrast / Color
@@ -36,7 +37,7 @@ Photie is a full-featured image editor and graphic design tool that runs entirel
 
 ## Keyboard shortcuts
 
-Photoshop-compatible: `V M L W C I J B S E G R O T U H Z` for tools, `Shift+letter` cycles tool variants, `[ ]` brush size, `D` / `X` colors, `Ctrl+Z` / `Ctrl+Shift+Z`, `Ctrl+J`, `Ctrl+E`, `Ctrl+A`, `Ctrl+D`, `Ctrl+Shift+I`, `Ctrl+T`, `Ctrl+0`, `Ctrl+1`, `Space` to pan, `Alt+Backspace` fill… Press `?` in the app for the full list.
+Photoshop-compatible: `V M L W C I J B S E G R O T U H Z` for tools, `Shift+letter` cycles tool variants, `[ ]` brush size, `D` / `X` colors, `Ctrl+Z` / `Ctrl+Shift+Z`, `Ctrl+J`, `Ctrl+E`, `Ctrl+G`, `Ctrl+A`, `Ctrl+D`, `Ctrl+Shift+I`, `Ctrl+T`, `Ctrl+0`, `Ctrl+1`, `Space` to pan, `Alt+Backspace` fill… Press `?` in the app for the full list.
 
 ## Development
 

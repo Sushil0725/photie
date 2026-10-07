@@ -6,7 +6,7 @@ import { drawLayerContent } from '../engine/render';
 import { docToFile, fileToDoc } from '../engine/serialize';
 import { opaqueBounds } from '../engine/selection';
 import { addUpload, loadProject, saveProject } from '../engine/storage';
-import type { Doc, Fill, Layer } from '../engine/types';
+import type { Doc, Fill, Layer, LayerGroup } from '../engine/types';
 import { canvasToBlob, createCanvas, ctx2d, debounce, downloadBlob, fileToImage, loadImage, uid } from '../engine/util';
 import { S, activeLayer, resetHistory, selectedLayers, setS, toast, withBusy } from './editor';
 import { addLayer, addLayers, deleteLayers } from './layers';
@@ -247,7 +247,7 @@ export function copy() {
   }
   const layers = selectedLayers();
   if (layers.length) {
-    setS({ clipboard: { layers } });
+    setS({ clipboard: { layers, groups: S().doc?.groups } });
     clipboardStale = false;
     toast(layers.length > 1 ? `Copied ${layers.length} layers` : 'Copied layer');
   }
@@ -264,7 +264,7 @@ export function cut() {
   }
   const layers = selectedLayers();
   if (layers.length) {
-    setS({ clipboard: { layers } });
+    setS({ clipboard: { layers, groups: S().doc?.groups } });
     clipboardStale = false;
     deleteLayers();
   }
@@ -275,12 +275,16 @@ export function pasteInternal() {
   const doc = S().doc;
   if (!clip || !doc) return false;
   if ('layers' in clip) {
+    // Copied groups come back as new groups; loose members of a group are pasted as loose layers.
+    const fresh = new Map<string, LayerGroup>();
+    for (const g of clip.groups || []) if (clip.layers.filter((l) => l.group === g.id).length > 1) fresh.set(g.id, { ...g, id: uid() });
     const copies = clip.layers.map((l) => {
       const d = duplicateLayer(l, 20);
       d.name = l.name;
+      d.group = (l.group && fresh.get(l.group)?.id) || null;
       return d;
     });
-    addLayers(copies, 'Paste');
+    addLayers(copies, 'Paste', [...fresh.values()]);
   } else {
     const l = createRasterLayer(clip.canvas, clip.x + clip.canvas.width / 2, clip.y + clip.canvas.height / 2, 'Pasted');
     addLayer(l, 'Paste');

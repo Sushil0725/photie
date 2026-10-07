@@ -133,6 +133,8 @@ export interface LayerBase {
   /** Alpha mask in layer-local pixel space (same size as the layer box). */
   mask?: HTMLCanvasElement | null;
   maskEnabled?: boolean;
+  /** Id of the layer group this layer belongs to (members of a group are adjacent in the stack). */
+  group?: string | null;
 }
 
 export interface RasterLayer extends LayerBase {
@@ -191,6 +193,15 @@ export interface ShapeLayer extends LayerBase {
 
 export type Layer = RasterLayer | TextLayer | ShapeLayer;
 
+/** A Photoshop-style layer group. Its members are a contiguous run of `Doc.layers` tagged with its id. */
+export interface LayerGroup {
+  id: string;
+  name: string;
+  opacity: number; // 0..1, applied to the members composited together
+  blend: BlendMode;
+  collapsed?: boolean;
+}
+
 export interface Doc {
   id: string;
   name: string;
@@ -198,6 +209,7 @@ export interface Doc {
   height: number;
   background: Fill | null;
   layers: Layer[]; // bottom -> top
+  groups?: LayerGroup[];
 }
 
 export interface Rect {

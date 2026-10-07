@@ -1,7 +1,7 @@
 import { S, invalidate, redo, setOpts, setS, setTool, undo, type PaintOpts, type ToolId, type ToolOptions } from '../store/editor';
 import { copy, cut } from '../store/files';
 import { contentAwareFill, deselect, fillSelection, invertSelection, selectAll } from '../store/image';
-import { arrange, mergeSelected, mergeVisible, newEmptyLayer, nudgeSelected, selectLayers, updateSelected } from '../store/layers';
+import { arrange, groupSelected, mergeSelected, mergeVisible, newEmptyLayer, nudgeSelected, selectLayers, ungroupSelected, updateSelected } from '../store/layers';
 import { actualSize, fitToScreen, zoomIn, zoomOut } from '../store/view';
 import { cmd } from './actions';
 import { applyCrop, cancelInteraction, finishPolygon, ix, startTextEdit } from './canvas/tools';
@@ -122,6 +122,10 @@ export function onKeyDown(e: KeyboardEvent) {
       case 'e':
         if (e.shiftKey) mergeVisible();
         else mergeSelected();
+        break;
+      case 'g':
+        if (e.shiftKey) ungroupSelected();
+        else groupSelected();
         break;
       case 'i':
         if (e.shiftKey) invertSelection();

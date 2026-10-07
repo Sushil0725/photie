@@ -1,9 +1,27 @@
-import { memo, useEffect, useRef, useState } from 'react';
-import { Eye, EyeOff, Lock, LockOpen, Plus, Copy, Trash2, Type, Shapes, Image as ImageIcon, SquareDashed, Merge } from 'lucide-react';
+import { memo, useEffect, useRef, useState, type DragEvent } from 'react';
+import { Eye, EyeOff, Lock, LockOpen, Plus, Copy, Trash2, Type, Shapes, Image as ImageIcon, SquareDashed, Merge, ChevronDown, ChevronRight, Folder, FolderPlus, FolderMinus } from 'lucide-react';
+import { findGroup, groupMembers } from '../../engine/groups';
 import { layerThumbnail } from '../../engine/render';
-import { BLEND_MODES, type Layer } from '../../engine/types';
+import { BLEND_MODES, type Layer, type LayerGroup } from '../../engine/types';
 import { S, commit, setS, useEditor } from '../../store/editor';
-import { addMask, deleteLayers, duplicateLayers, mergeSelected, moveLayerTo, newEmptyLayer, selectLayers, toggleSelectLayer, updateLayer } from '../../store/layers';
+import {
+  addMask,
+  deleteLayers,
+  duplicateLayers,
+  mergeSelected,
+  moveGroupNextTo,
+  moveLayerNextTo,
+  newEmptyLayer,
+  selectGroup,
+  selectedGroup,
+  selectLayers,
+  toggleGroup,
+  toggleGroupLock,
+  toggleGroupVisibility,
+  toggleSelectLayer,
+  updateGroup,
+  updateLayer,
+} from '../../store/layers';
 import { selectLayerPixels } from '../../store/image';
 import { NumberField, Select } from '../controls';
 import { ContextMenu, canvasContextItems } from '../ContextMenu';
@@ -39,35 +57,54 @@ const Thumb = memo(function Thumb({ layer, mask }: { layer: Layer; mask?: boolea
   return <canvas ref={ref} width={64} height={64} className="layer-thumb" />;
 });
 
-function LayerRow({ layer, index, selected, editMask, onDropAt }: { layer: Layer; index: number; selected: boolean; editMask: boolean; onDropAt: (id: string, index: number) => void }) {
+type DragItem = { kind: 'layer' | 'group'; id: string };
+type Where = 'above' | 'below';
+const DND_LAYER = 'text/x-layer';
+const DND_GROUP = 'text/x-group';
+
+/** Drag-and-drop handlers shared by layer and group rows. Rows are listed top-first. */
+function useRowDnd(item: DragItem, enabled: boolean, onDrop: (item: DragItem, where: Where) => void) {
+  const [over, setOver] = useState<Where | null>(null);
+  const whereOf = (e: DragEvent) => {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    return e.clientY < r.top + r.height / 2 ? 'above' : 'below';
+  };
+  return {
+    over,
+    props: {
+      draggable: enabled,
+      onDragStart: (e: DragEvent) => {
+        e.stopPropagation();
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData(item.kind === 'group' ? DND_GROUP : DND_LAYER, item.id);
+      },
+      onDragOver: (e: DragEvent) => {
+        if (!e.dataTransfer.types.includes(DND_LAYER) && !e.dataTransfer.types.includes(DND_GROUP)) return;
+        e.preventDefault();
+        setOver(whereOf(e));
+      },
+      onDragLeave: () => setOver(null),
+      onDrop: (e: DragEvent) => {
+        e.preventDefault();
+        setOver(null);
+        const g = e.dataTransfer.getData(DND_GROUP);
+        const l = e.dataTransfer.getData(DND_LAYER);
+        if (g) onDrop({ kind: 'group', id: g }, whereOf(e));
+        else if (l) onDrop({ kind: 'layer', id: l }, whereOf(e));
+      },
+    },
+  };
+}
+
+function LayerRow({ layer, index, selected, editMask, inGroup, onDrop }: { layer: Layer; index: number; selected: boolean; editMask: boolean; inGroup: boolean; onDrop: (item: DragItem, where: Where) => void }) {
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(layer.name);
-  const [over, setOver] = useState<'above' | 'below' | null>(null);
+  const dnd = useRowDnd({ kind: 'layer', id: layer.id }, !editing, onDrop);
   const icon = layer.type === 'text' ? <Type size={12} /> : layer.type === 'shape' ? <Shapes size={12} /> : <ImageIcon size={12} />;
   return (
     <div
-      className={'layer-row' + (selected ? ' selected' : '') + (layer.visible ? '' : ' hidden') + (over ? ' drop-' + over : '')}
-      draggable={!editing}
-      onDragStart={(e) => {
-        e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/x-layer', layer.id);
-      }}
-      onDragOver={(e) => {
-        if (!e.dataTransfer.types.includes('text/x-layer')) return;
-        e.preventDefault();
-        const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        setOver(e.clientY < r.top + r.height / 2 ? 'above' : 'below');
-      }}
-      onDragLeave={() => setOver(null)}
-      onDrop={(e) => {
-        e.preventDefault();
-        setOver(null);
-        const id = e.dataTransfer.getData('text/x-layer');
-        if (!id || id === layer.id) return;
-        const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        // Rows are listed top-first, so "above" means a higher stack index.
-        onDropAt(id, e.clientY < r.top + r.height / 2 ? index + 1 : index);
-      }}
+      className={'layer-row' + (selected ? ' selected' : '') + (layer.visible ? '' : ' hidden') + (inGroup ? ' in-group' : '') + (dnd.over ? ' drop-' + dnd.over : '')}
+      {...dnd.props}
       onClick={(e) => {
         if (e.ctrlKey || e.metaKey) {
           if ((e.target as HTMLElement).closest('.layer-thumb')) selectLayerPixels(layer);
@@ -172,33 +209,168 @@ function LayerRow({ layer, index, selected, editMask, onDropAt }: { layer: Layer
   );
 }
 
+function GroupRow({ group, members, selected, onDrop }: { group: LayerGroup; members: Layer[]; selected: boolean; onDrop: (item: DragItem, where: Where) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(group.name);
+  const dnd = useRowDnd({ kind: 'group', id: group.id }, !editing, onDrop);
+  const visible = members.some((l) => l.visible);
+  const locked = members.every((l) => l.locked);
+  return (
+    <div
+      className={'layer-row group-row' + (selected ? ' selected' : '') + (visible ? '' : ' hidden') + (dnd.over ? ' drop-' + dnd.over : '')}
+      {...dnd.props}
+      onClick={(e) => selectGroup(group.id, e.ctrlKey || e.metaKey || e.shiftKey)}
+    >
+      <button
+        className="icon-btn tiny"
+        title={visible ? 'Hide group' : 'Show group'}
+        onClick={(e) => {
+          e.stopPropagation();
+          toggleGroupVisibility(group.id);
+        }}
+      >
+        {visible ? <Eye size={14} /> : <EyeOff size={14} />}
+      </button>
+      <button
+        className="icon-btn tiny group-chevron"
+        title={group.collapsed ? 'Expand group' : 'Collapse group'}
+        onClick={(e) => {
+          e.stopPropagation();
+          updateGroup(group.id, { collapsed: !group.collapsed });
+        }}
+      >
+        {group.collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+      </button>
+      <div className="thumb-wrap group-thumb">
+        <Folder size={18} />
+      </div>
+      <div className="layer-name">
+        {editing ? (
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onBlur={() => {
+              setEditing(false);
+              if (name.trim() && name !== group.name) updateGroup(group.id, { name: name.trim() }, 'Rename group');
+            }}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+              if (e.key === 'Escape') {
+                setName(group.name);
+                setEditing(false);
+              }
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <span
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              setName(group.name);
+              setEditing(true);
+            }}
+            title="Double-click to rename"
+          >
+            {group.name}
+          </span>
+        )}
+        <small>
+          {members.length} {members.length === 1 ? 'layer' : 'layers'}
+          {group.blend !== 'source-over' && ' · ' + BLEND_MODES.find((b) => b.value === group.blend)?.label}
+          {group.opacity < 1 && ` · ${Math.round(group.opacity * 100)}%`}
+        </small>
+      </div>
+      <button
+        className={'icon-btn tiny' + (locked ? ' on' : ' faint')}
+        title={locked ? 'Unlock group' : 'Lock group'}
+        onClick={(e) => {
+          e.stopPropagation();
+          toggleGroupLock(group.id);
+        }}
+      >
+        {locked ? <Lock size={13} /> : <LockOpen size={13} />}
+      </button>
+    </div>
+  );
+}
+
 export function LayersPanel() {
   const doc = useEditor((s) => s.doc);
   const selectedIds = useEditor((s) => s.selectedIds);
   const editMask = useEditor((s) => s.editMask);
+  useEditor((s) => s.selectedGroupId);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   if (!doc) return null;
   const active = doc.layers.find((l) => l.id === selectedIds[selectedIds.length - 1]);
-  const rows = [...doc.layers].map((l, i) => ({ l, i })).reverse();
+  const selGroup = selectedGroup();
+
+  const dropOnLayer = (item: DragItem, target: Layer, where: Where) => {
+    if (item.kind === 'layer') moveLayerNextTo(item.id, target.id, where, target.group ?? null);
+    else if (target.group !== item.id) moveGroupNextTo(item.id, target.id, where);
+  };
+  const dropOnGroup = (item: DragItem, g: LayerGroup, where: Where) => {
+    const members = groupMembers(doc, g.id);
+    const top = members[members.length - 1];
+    const bottom = members[0];
+    if (!top) return;
+    if (item.kind === 'group') {
+      if (item.id !== g.id) moveGroupNextTo(item.id, where === 'above' ? top.id : bottom.id, where);
+    } else if (where === 'above') moveLayerNextTo(item.id, top.id, 'above', null);
+    // Below an open group's header means "into the group"; below a collapsed one means after it.
+    else if (g.collapsed) moveLayerNextTo(item.id, bottom.id, 'below', null);
+    else moveLayerNextTo(item.id, top.id, 'above', g.id);
+  };
+
+  // Top-first rows; a group's header sits above its members, which are hidden when collapsed.
+  const rows: React.ReactNode[] = [];
+  const seen = new Set<string>();
+  for (let i = doc.layers.length - 1; i >= 0; i--) {
+    const l = doc.layers[i];
+    const g = findGroup(doc, l.group);
+    if (g && !seen.has(g.id)) {
+      seen.add(g.id);
+      rows.push(<GroupRow key={'g:' + g.id} group={g} members={groupMembers(doc, g.id)} selected={selGroup?.id === g.id} onDrop={(item, where) => dropOnGroup(item, g, where)} />);
+    }
+    if (g?.collapsed) continue;
+    rows.push(
+      <LayerRow
+        key={l.id}
+        layer={l}
+        index={i}
+        inGroup={!!g}
+        selected={selectedIds.includes(l.id)}
+        editMask={editMask}
+        onDrop={(item, where) => dropOnLayer(item, l, where)}
+      />,
+    );
+  }
 
   return (
     <div className="layers-panel">
       <div className="layers-top">
         <Select
-          value={active?.blend || 'source-over'}
+          value={selGroup ? selGroup.blend : active?.blend || 'source-over'}
           options={BLEND_MODES}
-          onChange={(v) => active && updateLayer(active.id, { blend: v }, 'Blend mode')}
-          title="Blend mode"
+          onChange={(v) => {
+            if (selGroup) updateGroup(selGroup.id, { blend: v }, 'Group blend mode');
+            else if (active) updateLayer(active.id, { blend: v }, 'Blend mode');
+          }}
+          title={selGroup ? 'Group blend mode' : 'Blend mode'}
         />
-        <div className="opacity-field" title="Layer opacity">
+        <div className="opacity-field" title={selGroup ? 'Group opacity' : 'Layer opacity'}>
           <span>Opacity</span>
           <NumberField
-            value={active ? Math.round(active.opacity * 100) : 100}
+            value={Math.round((selGroup ? selGroup.opacity : active ? active.opacity : 1) * 100)}
             min={0}
             max={100}
             unit="%"
             width={64}
-            onChange={(v) => active && updateLayer(active.id, { opacity: v / 100 }, 'Opacity')}
+            onChange={(v) => {
+              if (selGroup) updateGroup(selGroup.id, { opacity: v / 100 }, 'Group opacity');
+              else if (active) updateLayer(active.id, { opacity: v / 100 }, 'Opacity');
+            }}
           />
         </div>
       </div>
@@ -209,19 +381,7 @@ export function LayersPanel() {
           setMenu({ x: e.clientX, y: e.clientY });
         }}
       >
-        {rows.map(({ l, i }) => (
-          <LayerRow
-            key={l.id}
-            layer={l}
-            index={i}
-            selected={selectedIds.includes(l.id)}
-            editMask={editMask}
-            onDropAt={(id, idx) => {
-              const from = doc.layers.findIndex((x) => x.id === id);
-              if (from >= 0) moveLayerTo(id, from < idx ? idx - 1 : idx);
-            }}
-          />
-        ))}
+        {rows}
         <div
           className={'layer-row background-row' + (selectedIds.length === 0 ? ' selected' : '')}
           onClick={() => {
@@ -258,6 +418,9 @@ export function LayersPanel() {
         </button>
         <button className="icon-btn" title="Duplicate (Ctrl+J)" disabled={!selectedIds.length} onClick={() => duplicateLayers(selectedIds, 20)}>
           <Copy size={16} />
+        </button>
+        <button className="icon-btn" title={selGroup ? 'Ungroup (Ctrl+Shift+G)' : 'Group layers (Ctrl+G)'} disabled={!selectedIds.length} onClick={toggleGroup}>
+          {selGroup ? <FolderMinus size={16} /> : <FolderPlus size={16} />}
         </button>
         <button className="icon-btn" title="Add layer mask" disabled={!active || !!active.mask} onClick={() => addMask(true)}>
           <SquareDashed size={16} />

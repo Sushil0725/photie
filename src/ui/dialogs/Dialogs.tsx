@@ -429,6 +429,7 @@ const SHORTCUTS: [string, string][] = [
   ['Nudge layer (×10 with Shift)', 'Arrow keys'],
   ['New layer', kb('Mod+Shift+N')],
   ['Merge down / visible', kb('Mod+E') + ' / ' + kb('Mod+Shift+E')],
+  ['Group / ungroup layers', kb('Mod+G') + ' / ' + kb('Mod+Shift+G')],
   ['Free transform', kb('Mod+T')],
   ['Zoom in / out / fit / 100%', kb('Mod+=') + ' / ' + kb('Mod+-') + ' / ' + kb('Mod+0') + ' / ' + kb('Mod+1')],
   ['Save / download', kb('Mod+S') + ' / ' + kb('Mod+Shift+S')],

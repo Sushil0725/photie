@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Check, ChevronRight } from 'lucide-react';
 import { S, activeLayer, selectedLayers, setS } from '../store/editor';
 import { cmd, kb, type MenuItem } from './actions';
-import { arrange, flipSelected, rasterizeSelected, addMask, mergeSelected } from '../store/layers';
+import { arrange, flipSelected, rasterizeSelected, addMask, mergeSelected, groupSelected, ungroupSelected } from '../store/layers';
 import { clearSelectionPixels, contentAwareFill, cropToSelection, deselect, invertSelection, selectLayerPixels } from '../store/image';
 import { startTextEdit } from './canvas/tools';
 import { useOutside } from './controls';
@@ -104,6 +104,9 @@ export function canvasContextItems(): MenuItem[] {
       { label: 'Duplicate', shortcut: kb('Mod+J'), action: cmd.duplicate },
       { label: 'Delete', shortcut: 'Del', action: cmd.delete },
       { divider: true },
+      sel.some((x) => x.group)
+        ? { label: 'Ungroup', shortcut: kb('Mod+Shift+G'), action: ungroupSelected }
+        : { label: 'Group', shortcut: kb('Mod+G'), action: groupSelected, disabled: sel.length < 2 },
       {
         label: 'Arrange',
         submenu: [
